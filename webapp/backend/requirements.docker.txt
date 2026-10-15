@@ -1,0 +1,39 @@
+# edbo Web platform — backend container dependencies.
+#
+# Why this file exists (instead of installing ./setup.py's pins directly):
+# the upstream edbo setup.py pins gpytorch==1.0.0 / pyro-ppl==1.1 / torch==1.3.1
+# (2019). Those wheels do not install on a current Python 3.9 toolchain. The
+# algorithm only uses GPyTorch's stable public API (ExactGP, MaternKernel,
+# ScaleKernel, ConstantMean, GaussianLikelihood, ExactMarginalLogLikelihood), so
+# we use a mutually-compatible, actively maintained set instead.
+#
+# torch is installed separately with the CPU-only wheel index (see Dockerfile)
+# to avoid pulling the ~2.5 GB CUDA build.
+
+# ------------------------------------------------------------------ web framework
+fastapi>=0.110,<1.0
+uvicorn[standard]>=0.29,<1.0
+sqlalchemy>=2.0,<3.0
+pydantic>=2.6,<3.0
+python-multipart>=0.0.9
+
+# ------------------------------------------------------- edbo algorithm runtime
+numpy==1.26.4
+pandas==2.0.3
+scipy==1.11.4
+scikit-learn==1.2.2       # edbo's RF model uses max_features='auto' (removed in sklearn>=1.3)
+matplotlib==3.7.5
+seaborn==0.12.2
+dill==0.3.8
+ipython==8.18.1
+pyclustering==0.10.1
+rdkit==2023.9.6           # hard import requirement (edbo.feature_utils)
+# Provides the `mordred` module used by edbo's 'mordred' / 'smiles' / 'resolve'
+# encodings and by the platform's "Mordred 2D" descriptor tool. The original
+# `mordred` 1.2.0 (2019) is unmaintained; mordredcommunity is its drop-in fork
+# (same import name, numpy 1.26 compatible). pip keeps rdkit pinned above.
+mordredcommunity==2.0.7
+gpytorch==1.11
+# gpytorch 1.11's settings live in linear_operator; pin it to the 0.5.x line that
+# shipped with gpytorch 1.11 so its internal *_state flags stay compatible.
+linear_operator==0.5.3

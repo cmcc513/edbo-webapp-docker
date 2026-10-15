@@ -1,0 +1,35 @@
+# Build context = repository root (the backend image needs ./edbo and ./setup.py).
+# Keep the context small and free of runtime state.
+
+# VCS
+.git
+**/.git
+**/.github
+
+# Python caches / build artifacts
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/.pytest_cache
+**/*.egg-info
+
+# Large, non-runtime project folders
+docs
+examples
+experiments
+
+# Frontend build inputs/outputs (node_modules is rebuilt inside the image)
+webapp/frontend/node_modules
+webapp/frontend/dist
+webapp/frontend/tsconfig.tsbuildinfo
+
+# Backend runtime state — provided by a Docker volume at run time, never baked in
+webapp/backend/data
+webapp/backend/data_backup_*
+webapp/backups
+
+# Editor / OS noise
+.vscode
+.idea
+.DS_Store
+Thumbs.db

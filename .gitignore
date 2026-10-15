@@ -1,0 +1,32 @@
+# ---------------------------------------------------------------- Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+.pytest_cache/
+.ipynb_checkpoints/
+.venv/
+venv/
+
+# ------------------------------- edbo webapp: runtime state (never commit)
+# These hold real experimental results (SQLite DB, dill pickles, descriptor
+# CSV uploads) and can be hundreds of MB — they are mounted as a Docker volume
+# at run time and recreated automatically when absent.
+/webapp/backend/data/
+/webapp/backend/data_backup_*/
+/webapp/backups/
+
+# -------------------------------------------------------------------- Frontend
+/webapp/frontend/node_modules/
+/webapp/frontend/dist/
+/webapp/frontend/dist-ssr/
+/webapp/frontend/*.tsbuildinfo
+
+# -------------------------------------------------------------- Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
+npm-debug.log*
