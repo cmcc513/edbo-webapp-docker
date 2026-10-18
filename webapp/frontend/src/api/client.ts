@@ -19,6 +19,7 @@ import type {
   DerivedFeature,
   ProjectConfig,
   WhatIfResult,
+  CsvImportResult,
 } from "./types";
 
 async function req<T>(url: string, options?: RequestInit): Promise<T> {
@@ -253,6 +254,24 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ experiments }),
     }),
+  uploadResultsCsv: async (id: string, round: number, file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await fetch(`/api/projects/${id}/rounds/${round}/results-csv`, {
+      method: "POST",
+      body: fd,
+    });
+    if (!res.ok) {
+      let detail = res.statusText;
+      try {
+        detail = (await res.json()).detail ?? detail;
+      } catch {
+        /* ignore */
+      }
+      throw new Error(detail);
+    }
+    return res.json() as Promise<CsvImportResult>;
+  },
 
   // rules
   getRules: (id: string) => req<RulesResult>(`/api/projects/${id}/rules`),

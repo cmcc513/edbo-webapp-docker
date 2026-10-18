@@ -1,10 +1,13 @@
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..instance_manager import manager
+from ..results_csv import (
+    CsvFormatError, make_resolver, plan_rows, read_csv_bytes, resolve_columns,
+)
 from ..rules import matched_rules
 from .. import models, schemas, services
 
@@ -134,6 +137,148 @@ def add_human_conditions(project_id: str, round_index: int,
     return schemas.HumanExperimentResult(
         ok=len(rejected) == 0, accepted=accepted,
         rejected=rejected, warnings=warnings,
+    )
+
+
+@router.post("/{project_id}/rounds/{round_index}/results-csv",
+             response_model=schemas.CsvImportOut)
+async def upload_results_csv(project_id: str, round_index: int,
+                             file: UploadFile = File(...),
+                             db: Session = Depends(get_db)):
+    """Import lab results for the current run-list from the batch CSV.
+
+    Rows whose component values match an entry of this round fill that entry's
+    yield (blank yields are skipped); unmatched valid rows are appended as new
+    completed experiments. Every row is validated and reported individually.
+    """
+    project = db.get(models.Project, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+    rnd = _get_round(db, project_id, round_index)
+    if not rnd:
+        raise HTTPException(404, "Round not found")
+    try:
+        session = manager.get(project_id)
+    except KeyError:
+        raise HTTPException(409, "Reaction space not built yet.")
+
+    try:
+        df = read_csv_bytes(await file.read())
+        component_columns, target_column = resolve_columns(
+            df, session.component_keys, project.target
+        )
+    except CsvFormatError as exc:
+        raise HTTPException(400, str(exc))
+
+    existing = {e.domain_index: e for e in rnd.experiments}
+    plans = plan_rows(
+        df, component_columns, target_column,
+        resolve=make_resolver(session.resolve_domain_index),
+        existing_indices=set(existing),
+    )
+
+    # Conditions already measured in other rounds are legal but worth flagging.
+    prior_by_index: dict[int, tuple[float, int]] = {}
+    prior_rows = (
+        db.query(models.Experiment, models.Round.round_index)
+        .join(models.Round, models.Experiment.round_id == models.Round.id)
+        .filter(models.Round.project_id == project_id)
+        .filter(models.Round.id != rnd.id)
+        .filter(models.Experiment.status == "done")
+        .filter(models.Experiment.observed_value.isnot(None))
+        .all()
+    )
+    for exp, prior_round in prior_rows:
+        prior_by_index.setdefault(exp.domain_index, (exp.observed_value, prior_round))
+
+    rules = project.rules_json or []
+    entered_by = "csv-import"
+    counts = {"updated": 0, "added": 0, "skipped": 0, "rejected": 0}
+    retrain = False
+    out_rows: list[schemas.CsvRowResult] = []
+
+    for plan in plans:
+        warnings = list(plan.warnings)
+        if plan.action != "import":
+            counts["rejected" if plan.action == "reject" else "skipped"] += 1
+            out_rows.append(schemas.CsvRowResult(
+                row=plan.row,
+                action="rejected" if plan.action == "reject" else "skipped",
+                reason=plan.reason, components=plan.components,
+                observed_value=plan.observed_value, warnings=warnings,
+            ))
+            continue
+
+        exp = existing.get(plan.domain_index)
+        if exp is not None:
+            if exp.status == "done" and exp.observed_value is not None:
+                if abs(exp.observed_value - plan.observed_value) < 1e-12:
+                    counts["skipped"] += 1
+                    out_rows.append(schemas.CsvRowResult(
+                        row=plan.row, action="skipped",
+                        reason="产率与已有值相同（未改动）。",
+                        components=exp.components_json,
+                        observed_value=exp.observed_value,
+                        experiment_id=exp.id, warnings=warnings,
+                    ))
+                    continue
+                warnings.append(f"覆盖原有产率 {exp.observed_value:g}。")
+            if exp.imported:
+                retrain = True
+            components = exp.components_json
+            exp.status = "done"
+            exp.observed_value = plan.observed_value
+            exp.entered_by = entered_by
+            exp.entered_at = datetime.utcnow()
+            action = "updated"
+        else:
+            info = session.points_info([plan.domain_index])[0]
+            components = info["components"]
+            provenance = {
+                "source": "human",
+                "adopted_from": "csv_import",
+                "by": entered_by,
+                "at": datetime.utcnow().isoformat(),
+                **services.descriptor_snapshot(project),
+            }
+            exp = models.Experiment(
+                round_id=rnd.id, domain_index=plan.domain_index, source="human",
+                status="done", components_json=components,
+                observed_value=plan.observed_value, entered_by=entered_by,
+                entered_at=datetime.utcnow(), provenance_json=provenance,
+            )
+            db.add(exp)
+            db.flush()   # assign the uuid so it can be reported
+            existing[plan.domain_index] = exp
+            action = "added"
+            counts["added"] += 1
+
+        hit = matched_rules(components, rules)
+        if hit:
+            warnings.append("命中条件排除规则：" + "、".join(hit) + "（已按实测数据保留）。")
+            provenance = dict(exp.provenance_json or {})
+            provenance["rule_overrides"] = hit
+            exp.provenance_json = provenance
+        prior = prior_by_index.get(plan.domain_index)
+        if prior is not None:
+            warnings.append(
+                f"该条件在第 {prior[1]} 轮已有产率 {prior[0]:g}。"
+            )
+        if action == "updated":
+            counts["updated"] += 1
+        out_rows.append(schemas.CsvRowResult(
+            row=plan.row, action=action, components=components,
+            observed_value=plan.observed_value, experiment_id=exp.id,
+            warnings=warnings,
+        ))
+
+    db.commit()
+    retrained = services.retrain_from_db(db, project_id) if retrain else False
+    return schemas.CsvImportOut(
+        ok=counts["rejected"] == 0, round_index=round_index,
+        target=project.target, updated=counts["updated"], added=counts["added"],
+        skipped=counts["skipped"], rejected=counts["rejected"],
+        retrained=retrained, rows=out_rows,
     )
 
 

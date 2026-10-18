@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, pollTask } from "../api/client";
-import type { Project, Proposal, RecommendItem, PriorExperiment } from "../api/types";
+import type { Project, Proposal, RecommendItem, PriorExperiment, CsvImportResult } from "../api/types";
 import { Spinner, StatusBadge, SourceBadge, ExpStatusBadge, EmptyState, ProvenanceInfo } from "../components/ui";
 import RulesEditor from "../components/RulesEditor";
 import ImportPanel from "../components/ImportPanel";
@@ -249,6 +249,9 @@ function RunList({
 }) {
   const [values, setValues] = useState<Record<string, string>>({});
   const [working, setWorking] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [csvReport, setCsvReport] = useState<CsvImportResult | null>(null);
+  const [csvBusy, setCsvBusy] = useState(false);
 
   useEffect(() => {
     const init: Record<string, string> = {};
@@ -293,19 +296,75 @@ function RunList({
     }
   };
 
+  const downloadCsv = () => {
+    const esc = (v: string | number | null | undefined) => {
+      const s = v == null ? "" : String(v);
+      return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const header = [...compKeys, target].map(esc).join(",");
+    const body = experiments.map((e) =>
+      [...compKeys.map((k) => e.components[k]), e.observed_value ?? ""].map(esc).join(",")
+    );
+    const blob = new Blob(["\uFEFF" + [header, ...body].join("\r\n")], {
+      type: "text/csv;charset=utf-8;",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `round_${round}_batch.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  };
+
+  const uploadCsv = async (file: File) => {
+    setCsvBusy(true);
+    try {
+      setCsvReport(await api.uploadResultsCsv(projectId, round, file));
+      onChanged();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCsvBusy(false);
+    }
+  };
+
   const nProposed = experiments.filter((e) => e.status === "proposed").length;
   const nDone = experiments.filter((e) => e.status === "done").length;
 
   return (
     <div className="card overflow-hidden">
-      <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
-        <div>
+      <div className="flex items-center justify-between gap-4 border-b border-slate-100 px-5 py-3">
+        <div className="min-w-0">
           <h3 className="font-semibold text-slate-700">本轮实验列表（第 {round} 轮）</h3>
           <p className="text-xs text-slate-500">
-            待实验 {nProposed} · 已实验 {nDone}。条件来自下方“推荐榜单采纳”与“人类决策”。做完填入产率并保存。
+            待实验 {nProposed} · 已实验 {nDone}。条件来自下方“推荐榜单采纳”与“人类决策”。做完填入产率并保存，
+            也可下载 CSV 填好后上传批量录入。
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex shrink-0 flex-wrap justify-end gap-2">
+          <button className="btn-ghost" onClick={downloadCsv} disabled={experiments.length === 0}>
+            下载CSV
+          </button>
+          <button
+            className="btn-ghost"
+            onClick={() => fileInput.current?.click()}
+            disabled={csvBusy || working || busy}
+          >
+            {csvBusy && <Spinner />} 上传CSV
+          </button>
+          <input
+            ref={fileInput}
+            type="file"
+            accept=".csv,text/csv"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = "";
+              if (file) uploadCsv(file);
+            }}
+          />
           <button className="btn-ghost" onClick={saveAll} disabled={working || busy}>
             {working && <Spinner />} 保存产率
           </button>
@@ -314,6 +373,43 @@ function RunList({
           </button>
         </div>
       </div>
+
+      {csvReport && (
+        <div className="border-b border-slate-100 bg-slate-50 px-5 py-3 text-xs">
+          <div className="flex items-start justify-between gap-4">
+            <div className="text-slate-600">
+              CSV 导入：更新 <b className="text-emerald-600">{csvReport.updated}</b> 条 · 新增{" "}
+              <b className="text-brand-700">{csvReport.added}</b> 条 · 跳过 {csvReport.skipped} 条 ·
+              拒绝 <b className={csvReport.rejected ? "text-rose-600" : ""}>{csvReport.rejected}</b> 条
+              {csvReport.retrained && <span className="text-slate-400">（模型已按新数据重训）</span>}
+            </div>
+            <button
+              className="shrink-0 text-slate-400 hover:text-slate-600"
+              onClick={() => setCsvReport(null)}
+            >
+              关闭
+            </button>
+          </div>
+          {(csvReport.rejected > 0 || csvReport.rows.some((r) => r.warnings.length > 0)) && (
+            <ul className="mt-1.5 max-h-32 space-y-0.5 overflow-y-auto">
+              {csvReport.rows
+                .filter((r) => r.action === "rejected")
+                .map((r) => (
+                  <li key={`rej-${r.row}`} className="text-rose-600">
+                    第 {r.row} 行：{r.reason}
+                  </li>
+                ))}
+              {csvReport.rows.flatMap((r) =>
+                r.warnings.map((w, i) => (
+                  <li key={`warn-${r.row}-${i}`} className="text-amber-600">
+                    第 {r.row} 行：{w}
+                  </li>
+                ))
+              )}
+            </ul>
+          )}
+        </div>
+      )}
 
       {experiments.length === 0 ? (
         <EmptyState title="本轮还没有实验" hint="从下方推荐榜单采纳，或用人类决策添加" />

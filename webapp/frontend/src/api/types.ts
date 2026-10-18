@@ -165,6 +165,30 @@ export interface ImportPreview {
   n_rows: number;
 }
 
+export type CsvRowAction = "updated" | "added" | "skipped" | "rejected";
+
+export interface CsvRowResult {
+  row: number;
+  action: CsvRowAction;
+  reason?: string | null;
+  components?: Record<string, string | number> | null;
+  observed_value?: number | null;
+  experiment_id?: string | null;
+  warnings: string[];
+}
+
+export interface CsvImportResult {
+  ok: boolean;
+  round_index: number;
+  target: string;
+  updated: number;
+  added: number;
+  skipped: number;
+  rejected: number;
+  retrained: boolean;
+  rows: CsvRowResult[];
+}
+
 export interface PriorExperiment {
   components: Record<string, string | number>;
   observed_value: number;

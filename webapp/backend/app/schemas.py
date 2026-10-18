@@ -286,6 +286,28 @@ class HumanExperimentResult(BaseModel):
     warnings: list[dict] = []
 
 
+class CsvRowResult(BaseModel):
+    row: int                                    # 1-based data row (header = 1)
+    action: str                                 # updated | added | skipped | rejected
+    reason: Optional[str] = None
+    components: Optional[dict[str, Any]] = None
+    observed_value: Optional[float] = None
+    experiment_id: Optional[str] = None
+    warnings: list[str] = []
+
+
+class CsvImportOut(BaseModel):
+    ok: bool
+    round_index: int
+    target: str
+    updated: int = 0
+    added: int = 0
+    skipped: int = 0
+    rejected: int = 0
+    retrained: bool = False
+    rows: list[CsvRowResult] = []
+
+
 # ------------------------------------------------------------------ edit / predict
 class EditExperimentIn(BaseModel):
     observed_value: Optional[float] = None   # None -> mark as skipped / remove

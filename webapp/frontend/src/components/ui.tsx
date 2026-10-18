@@ -81,6 +81,7 @@ const ADOPTED_FROM_LABEL: Record<string, string> = {
   manual: "人类决策",
   init: "初始采样",
   import: "前置结果导入",
+  csv_import: "CSV 结果导入",
 };
 
 function fmtDesc(prov: Provenance): string {
